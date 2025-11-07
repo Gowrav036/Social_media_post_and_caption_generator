@@ -85,7 +85,18 @@ except Exception as e:
     print(f"Error initializing Gemini: {e}")
 
 
-def generate_social_media_post(keywords, tone, platform, hashtag_count):
+def _length_instruction(length_pref: str) -> str:
+    lp = (length_pref or "").lower()
+    if lp.startswith("short"):
+        return "Aim for 0–50 characters (short)."
+    if lp.startswith("medium"):
+        return "Aim for 50–120 characters (medium)."
+    if lp.startswith("long"):
+        return "Aim for 120+ characters (long)."
+    return "Prefer concise, scroll-stopping copy."
+
+
+def generate_social_media_post(keywords, tone, platform, hashtag_count, length_pref):
     # Access and set via globals to avoid NameError under threaded contexts
     gm = globals().get('gemini_model', None)
     if gm is None:
@@ -100,6 +111,7 @@ def generate_social_media_post(keywords, tone, platform, hashtag_count):
 
     prompt = (
         f"Generate a {tone} social media caption for {platform} with keywords: {keywords}. "
+        f"{_length_instruction(length_pref)} "
         f"Include exactly {hashtag_count} hashtags and a few emojis. Format as Caption, Hashtags, Emojis."
     )
 
@@ -177,7 +189,7 @@ def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, 
     if line:
         yield " ".join(line)
 
-def caption_from_image(image: Optional[Image.Image], description: str, tone: str, platform: str, hashtag_count: str) -> str:
+def caption_from_image(image: Optional[Image.Image], description: str, tone: str, platform: str, hashtag_count: str, length_pref: str) -> str:
     gm = globals().get('gemini_model', None)
     if gm is None:
         try:
@@ -189,6 +201,7 @@ def caption_from_image(image: Optional[Image.Image], description: str, tone: str
         return "Please upload an image."
     prompt = (
         f"You are a social media assistant. Using the provided image and hints, write a {tone} caption for {platform}. "
+        f"{_length_instruction(length_pref)} "
         f"Include exactly {hashtag_count} hashtags and a few emojis. If a short description is given, incorporate it."
     )
     try:
@@ -214,13 +227,22 @@ def image_from_caption(caption: str) -> Image.Image:
     except Exception:
         return _create_synthetic_image(caption)
 
-def both_from_keywords(keywords: str, tone: str, platform: str, hashtag_count: str):
-    cap = generate_social_media_post(keywords, tone, platform, hashtag_count)
+def both_from_keywords(keywords: str, tone: str, platform: str, hashtag_count: str, length_pref: str):
+    cap = generate_social_media_post(keywords, tone, platform, hashtag_count, length_pref)
     img = image_from_caption(cap)
     return cap, img
 
+
+def submit_feedback(feeling: str, context: str = ""):
+    try:
+        print("User feedback:", {"feeling": feeling, "context_len": len(context or "")})
+    except Exception:
+        pass
+    return "Thanks for your feedback!"
+
 with gr.Blocks() as demo:
     gr.Markdown("## 🌐 Social Media Post & Image Generator")
+    gr.Markdown("Caption length varies widely — Short (0–50): 22% • Medium (50–120): 55% • Long (120+): 23%")
 
     mode = gr.Radio([
         "Photo → Caption",
@@ -235,14 +257,21 @@ with gr.Blocks() as demo:
         with gr.Row():
             platform_input = gr.Dropdown(["Instagram", "LinkedIn", "Twitter"], value="Instagram", label="Platform")
             hashtag_input = gr.Dropdown(["3", "5", "10"], value="5", label="Number of Hashtags")
+            length_kw = gr.Dropdown(["Short (0–50)", "Medium (50–120)", "Long (120+)"], value="Medium (50–120)", label="Caption Length")
         out_caption_kw = gr.Textbox(label="Generated Caption, Hashtags & Emojis", lines=8)
         out_image_kw = gr.Image(label="Generated Image", type="pil")
         btn_kw = gr.Button("Generate Both")
         btn_kw.click(
             fn=both_from_keywords,
-            inputs=[keywords_input, tone_input, platform_input, hashtag_input],
+            inputs=[keywords_input, tone_input, platform_input, hashtag_input, length_kw],
             outputs=[out_caption_kw, out_image_kw],
         )
+        with gr.Row():
+            fb_kw = gr.Radio(["😡 Bad", "😞 Sad", "🙂 Liked", "😊 Happy", "❤️ Loved"], label="Emoji feedback")
+            fb_btn_kw = gr.Button("Submit Feedback")
+        fb_ack_kw = gr.Markdown(visible=False)
+        fb_btn_kw.click(fn=submit_feedback, inputs=[fb_kw, out_caption_kw], outputs=[fb_ack_kw])
+        
 
     with gr.Group(visible=False) as cap_group:
         caption_in = gr.Textbox(label="Caption / Prompt", placeholder="Describe the desired image")
@@ -253,6 +282,11 @@ with gr.Blocks() as demo:
             inputs=[caption_in],
             outputs=[out_image_cap],
         )
+        with gr.Row():
+            fb_cap = gr.Radio(["😡 Bad", "😞 Sad", "🙂 Liked", "😊 Happy", "❤️ Loved"], label="Emoji feedback")
+            fb_btn_cap = gr.Button("Submit Feedback")
+        fb_ack_cap = gr.Markdown(visible=False)
+        fb_btn_cap.click(fn=submit_feedback, inputs=[fb_cap, caption_in], outputs=[fb_ack_cap])
 
     with gr.Group(visible=False) as img_group:
         img_in = gr.Image(label="Upload Photo", type="pil")
@@ -260,13 +294,19 @@ with gr.Blocks() as demo:
         tone_in2 = gr.Dropdown(["Funny", "Professional", "Motivational", "Casual", "Inspirational"], value="Casual", label="Tone")
         platform_in2 = gr.Dropdown(["Instagram", "LinkedIn", "Twitter"], value="Instagram", label="Platform")
         hashtag_in2 = gr.Dropdown(["3", "5", "10"], value="5", label="Number of Hashtags")
+        length_in2 = gr.Dropdown(["Short (0–50)", "Medium (50–120)", "Long (120+)"], value="Medium (50–120)", label="Caption Length")
         out_caption_img = gr.Textbox(label="Generated Caption", lines=8)
         btn_img = gr.Button("Generate Caption from Photo")
         btn_img.click(
             fn=caption_from_image,
-            inputs=[img_in, desc_in, tone_in2, platform_in2, hashtag_in2],
+            inputs=[img_in, desc_in, tone_in2, platform_in2, hashtag_in2, length_in2],
             outputs=[out_caption_img],
         )
+        with gr.Row():
+            fb_img = gr.Radio(["😡 Bad", "😞 Sad", "🙂 Liked", "😊 Happy", "❤️ Loved"], label="Emoji feedback")
+            fb_btn_img = gr.Button("Submit Feedback")
+        fb_ack_img = gr.Markdown(visible=False)
+        fb_btn_img.click(fn=submit_feedback, inputs=[fb_img, out_caption_img], outputs=[fb_ack_img])
 
     def _switch(u_mode):
         return (
@@ -276,7 +316,7 @@ with gr.Blocks() as demo:
         )
 
     mode.change(_switch, inputs=[mode], outputs=[kw_group, cap_group, img_group])
-
+ 
 if __name__ == "__main__":
     # Allow dynamic port selection via env; otherwise use 7871 to avoid conflicts
     port_env = os.getenv("GRADIO_SERVER_PORT")
